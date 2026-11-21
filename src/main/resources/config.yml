@@ -1,10 +1,11 @@
 
 enabled: true
 alerts: true
+debug: false
 
 combat:
   reach: 4.5
-  tracking-ticks: 5
+  tracking-ticks: 1
   movement-tracking: true
   flying-targets: true
   airborne-combat: true
