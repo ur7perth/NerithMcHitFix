@@ -1,8 +1,5 @@
-# NerithMc Configuration
-# Author: Nerith
 
 enabled: true
-
 alerts: true
 
 combat:
@@ -13,7 +10,7 @@ combat:
   airborne-combat: true
 
 recovery:
-  enabled: true
+  enabled: false
   prevent-duplicate-hits: true
   preserve-critical-hits: true
   preserve-knockback: true
