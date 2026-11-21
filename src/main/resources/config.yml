@@ -1,7 +1,6 @@
-
 enabled: true
 alerts: true
-debug: false
+debug: true
 
 combat:
   reach: 4.5
