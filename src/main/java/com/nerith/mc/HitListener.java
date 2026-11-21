@@ -3,6 +3,7 @@ package com.nerith.mc;
 
 import io.papermc.paper.event.player.PrePlayerAttackEntityEvent;
 import org.bukkit.Bukkit;
+import org.bukkit.ChatColor;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -11,18 +12,24 @@ import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 
 import java.util.Locale;
+import java.util.UUID;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 public final class HitListener implements Listener {
 
     private final NerithMc plugin;
     private final HitTracker tracker;
 
+    private final Map<UUID, HitTracker.AttackAttempt> pending =
+            new ConcurrentHashMap<>();
+
     public HitListener(NerithMc plugin, HitTracker tracker) {
         this.plugin = plugin;
         this.tracker = tracker;
     }
 
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.MONITOR)
     public void onPreAttack(PrePlayerAttackEntityEvent event) {
 
         if (!plugin.isEnabledSystem()) return;
@@ -38,65 +45,47 @@ public final class HitListener implements Listener {
         HitTracker.AttackAttempt attempt =
                 tracker.registerAttack(attacker, target);
 
-        int delay = Math.max(1, Math.min(3,
-                plugin.getConfig().getInt(
-                        "combat.tracking-ticks", 1
-                )
-        ));
+        pending.put(attacker.getUniqueId(), attempt);
 
         Bukkit.getScheduler().runTaskLater(plugin, () -> {
 
-            if (!tracker.finishAttempt(attacker, attempt)) return;
+            if (pending.get(attacker.getUniqueId()) != attempt) return;
 
-            if (!plugin.isEnabledSystem()) return;
+            pending.remove(attacker.getUniqueId());
+            tracker.finishAttempt(attacker, attempt);
+
             if (!attacker.isOnline() || !target.isOnline()) return;
 
             if (attempt.wasDamageEventSeen()) {
+
                 if (attempt.wasDamageCancelled()) {
-                    debug("DAMAGE_EVENT_CANCELLED "
-                            + attacker.getName() + " -> "
-                            + target.getName());
+                    alert(ChatColor.RED + "DAMAGE CANCELLED "
+                            + ChatColor.GRAY + attacker.getName()
+                            + " -> " + target.getName());
                 }
 
                 return;
             }
 
-            if (!plugin.getConfig().getBoolean("debug", false)) return;
+            if (!attacker.isGliding() || !target.isGliding()) return;
 
-            boolean bothGliding =
-                    attacker.isGliding() && target.isGliding();
+            double distance = attacker.getLocation()
+                    .distance(target.getLocation());
 
-            double distance =
-                    attacker.getLocation().distance(target.getLocation());
+            double reach = plugin.getConfig().getDouble(
+                    "combat.reach", 4.5
+            );
 
-            debug(String.format(
-                    Locale.US,
-                    "ATTACK_WITHOUT_DAMAGE_EVENT attacker=%s target=%s " +
-                    "elytra=%s distance=%.3f " +
-                    "attackerCooldown=%.3f targetCooldown=%.3f " +
-                    "attackerVelocity=(%.3f,%.3f,%.3f) " +
-                    "targetVelocity=(%.3f,%.3f,%.3f) tick=%d",
+            if (distance > reach + 1.5) return;
 
-                    attacker.getName(),
-                    target.getName(),
-                    bothGliding,
-                    distance,
+            alert(ChatColor.RED + "POSSIBLE ELYTRA GHOST HIT "
+                    + ChatColor.GRAY + attacker.getName()
+                    + " -> " + target.getName()
+                    + ChatColor.YELLOW
+                    + " | Distance: "
+                    + String.format(Locale.US, "%.2f", distance));
 
-                    attacker.getAttackCooldown(),
-                    target.getAttackCooldown(),
-
-                    attacker.getVelocity().getX(),
-                    attacker.getVelocity().getY(),
-                    attacker.getVelocity().getZ(),
-
-                    target.getVelocity().getX(),
-                    target.getVelocity().getY(),
-                    target.getVelocity().getZ(),
-
-                    attempt.getCreatedTick()
-            ));
-
-        }, delay);
+        }, 1L);
     }
 
     @EventHandler(
@@ -118,12 +107,21 @@ public final class HitListener implements Listener {
 
     @EventHandler
     public void onQuit(PlayerQuitEvent event) {
+        UUID id = event.getPlayer().getUniqueId();
+
+        pending.remove(id);
         tracker.remove(event.getPlayer());
     }
 
-    private void debug(String message) {
-        if (!plugin.getConfig().getBoolean("debug", false)) return;
+    private void alert(String message) {
 
-        plugin.getLogger().info("[CombatDebug] " + message);
+        String fullMessage =
+                ChatColor.GOLD + "[NerithMc] " + message;
+
+        plugin.getLogger().info(
+                ChatColor.stripColor(fullMessage)
+        );
+
+        plugin.sendAlert(message);
     }
 }
