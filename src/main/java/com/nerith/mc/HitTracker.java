@@ -9,12 +9,11 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
-public class HitTracker {
+public final class HitTracker {
 
     private final NerithMc plugin;
     private final MovementTracker movementTracker;
-
-    private final Map<UUID, Long> swings = new HashMap<>();
+    private final Map<UUID, AttackAttempt> attempts = new HashMap<>();
 
     private BukkitTask task;
     private long tick;
@@ -25,44 +24,73 @@ public class HitTracker {
     }
 
     public void start() {
-        task = Bukkit.getScheduler().runTaskTimer(
-                plugin,
-                () -> {
-                    if (!plugin.isEnabledSystem()) return;
+        if (task != null) task.cancel();
 
-                    tick++;
+        task = Bukkit.getScheduler().runTaskTimer(plugin, () -> {
+            if (!plugin.isEnabledSystem()) return;
 
-                    movementTracker.update(tick);
+            tick++;
+            movementTracker.update(tick);
 
-                    swings.entrySet().removeIf(
-                            entry -> tick - entry.getValue() > 5
-                    );
-                },
-                1L,
-                1L
-        );
+        }, 1L, 1L);
     }
 
     public void stop() {
         if (task != null) {
             task.cancel();
+            task = null;
         }
 
         clear();
     }
 
-    public void registerSwing(Player player) {
-        swings.put(player.getUniqueId(), tick);
+    public AttackAttempt registerAttack(Player attacker, Player target) {
+        AttackAttempt attempt = new AttackAttempt(
+                target.getUniqueId(),
+                tick,
+                System.nanoTime()
+        );
+
+        attempts.put(attacker.getUniqueId(), attempt);
+        return attempt;
     }
 
-    public boolean hasRecentSwing(Player player) {
-        Long time = swings.get(player.getUniqueId());
-
-        return time != null && tick - time <= 5;
+    public AttackAttempt getAttempt(Player attacker) {
+        return attempts.get(attacker.getUniqueId());
     }
 
-    public void consumeSwing(Player player) {
-        swings.remove(player.getUniqueId());
+    public boolean markDamage(
+            Player attacker,
+            Player target,
+            boolean cancelled,
+            double finalDamage
+    ) {
+        AttackAttempt attempt = attempts.get(attacker.getUniqueId());
+
+        if (attempt == null ||
+                !attempt.targetId.equals(target.getUniqueId())) {
+            return false;
+        }
+
+        attempt.damageEventSeen = true;
+        attempt.damageCancelled = cancelled;
+        attempt.finalDamage = finalDamage;
+
+        return true;
+    }
+
+    public boolean finishAttempt(Player attacker, AttackAttempt expected) {
+        if (attempts.get(attacker.getUniqueId()) != expected) {
+            return false;
+        }
+
+        attempts.remove(attacker.getUniqueId());
+        return true;
+    }
+
+    public void remove(Player player) {
+        attempts.remove(player.getUniqueId());
+        movementTracker.remove(player.getUniqueId());
     }
 
     public CombatSnapshot getSnapshot(Player player) {
@@ -74,11 +102,56 @@ public class HitTracker {
     }
 
     public int size() {
-        return swings.size();
+        return attempts.size();
     }
 
     public void clear() {
-        swings.clear();
+        attempts.clear();
         movementTracker.clear();
+    }
+
+    public static final class AttackAttempt {
+
+        private final UUID targetId;
+        private final long createdTick;
+        private final long createdNanos;
+
+        private boolean damageEventSeen;
+        private boolean damageCancelled;
+        private double finalDamage;
+
+        private AttackAttempt(
+                UUID targetId,
+                long createdTick,
+                long createdNanos
+        ) {
+            this.targetId = targetId;
+            this.createdTick = createdTick;
+            this.createdNanos = createdNanos;
+        }
+
+        public UUID getTargetId() {
+            return targetId;
+        }
+
+        public long getCreatedTick() {
+            return createdTick;
+        }
+
+        public long getCreatedNanos() {
+            return createdNanos;
+        }
+
+        public boolean wasDamageEventSeen() {
+            return damageEventSeen;
+        }
+
+        public boolean wasDamageCancelled() {
+            return damageCancelled;
+        }
+
+        public double getFinalDamage() {
+            return finalDamage;
+        }
     }
 }
