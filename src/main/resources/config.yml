@@ -1,4 +1,3 @@
-
 # NerithMc Configuration
 # Author: Nerith
 
@@ -6,8 +5,18 @@ enabled: true
 
 alerts: true
 
-# Maximum target detection distance
-reach: 4.5
+combat:
+  reach: 4.5
+  tracking-ticks: 5
+  movement-tracking: true
+  flying-targets: true
+  airborne-combat: true
 
-# Maximum ticks between swing and damage
-tracking-ticks: 5
+recovery:
+  enabled: true
+  prevent-duplicate-hits: true
+  preserve-critical-hits: true
+  preserve-knockback: true
+  preserve-attack-cooldown: true
+  preserve-strength: true
+  preserve-sharpness: true
