@@ -5,194 +5,74 @@ import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
-import org.bukkit.entity.Entity;
-import org.bukkit.entity.Player;
-import org.bukkit.event.EventHandler;
-import org.bukkit.event.Listener;
-import org.bukkit.event.entity.EntityDamageByEntityEvent;
-import org.bukkit.event.player.PlayerAnimationEvent;
-import org.bukkit.event.player.PlayerAnimationType;
 import org.bukkit.plugin.java.JavaPlugin;
-import org.bukkit.util.RayTraceResult;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.UUID;
+public final class NerithMc extends JavaPlugin {
 
-public final class NerithMc extends JavaPlugin implements Listener {
+    private HitTracker hitTracker;
+    private HitListener hitListener;
 
-    private final Map<UUID, SwingData> swings = new HashMap<>();
-
-    private boolean active;
+    private boolean enabled;
     private boolean alerts;
-    private double reach;
-    private int trackingTicks;
-
-    private static final String PREFIX =
-            ChatColor.GOLD + "[NerithMc] " + ChatColor.RESET;
-
-    private static class SwingData {
-
-        final UUID target;
-        final long tick;
-        final float cooldown;
-
-        SwingData(UUID target, long tick, float cooldown) {
-            this.target = target;
-            this.tick = tick;
-            this.cooldown = cooldown;
-        }
-    }
 
     @Override
     public void onEnable() {
-
         saveDefaultConfig();
-        loadSettings();
 
-        Bukkit.getPluginManager().registerEvents(this, this);
+        enabled = getConfig().getBoolean("enabled", true);
+        alerts = getConfig().getBoolean("alerts", true);
 
-        Bukkit.getScheduler().runTaskTimer(
-                this,
-                () -> {
-                    long now = Bukkit.getCurrentTick();
+        hitTracker = new HitTracker(this);
+        hitListener = new HitListener(this, hitTracker);
 
-                    swings.entrySet().removeIf(
-                            entry -> now - entry.getValue().tick
-                                    > trackingTicks
-                    );
-                },
-                1L,
-                1L
-        );
+        Bukkit.getPluginManager().registerEvents(hitListener, this);
 
-        getLogger().info("NerithMc enabled successfully.");
+        hitTracker.start();
+
+        getLogger().info("NerithMc enabled.");
     }
 
     @Override
     public void onDisable() {
-
-        swings.clear();
+        if (hitTracker != null) {
+            hitTracker.stop();
+        }
 
         getLogger().info("NerithMc disabled.");
     }
 
-    private void loadSettings() {
-
-        active = getConfig().getBoolean("enabled", true);
-
-        alerts = getConfig().getBoolean("alerts", true);
-
-        reach = getConfig().getDouble("reach", 4.5);
-
-        trackingTicks = getConfig().getInt("tracking-ticks", 5);
-
-        trackingTicks = Math.max(1, trackingTicks);
-
-        reach = Math.max(1.0, Math.min(6.0, reach));
+    public boolean isEnabledSystem() {
+        return enabled;
     }
 
-    @EventHandler
-    public void onSwing(PlayerAnimationEvent event) {
-
-        if (!active) return;
-
-        if (event.getAnimationType()
-                != PlayerAnimationType.ARM_SWING) {
-            return;
-        }
-
-        Player attacker = event.getPlayer();
-
-        if (!attacker.isOnline() || attacker.isDead()) return;
-
-        RayTraceResult result = attacker.getWorld().rayTraceEntities(
-                attacker.getEyeLocation(),
-                attacker.getEyeLocation().getDirection(),
-                reach,
-                0.15,
-                entity -> entity instanceof Player
-                        && entity != attacker
-                        && entity.isValid()
-                        && !entity.isDead()
-        );
-
-        if (result == null || result.getHitEntity() == null) {
-            swings.remove(attacker.getUniqueId());
-            return;
-        }
-
-        Entity target = result.getHitEntity();
-
-        if (!(target instanceof Player)) return;
-
-        swings.put(
-                attacker.getUniqueId(),
-                new SwingData(
-                        target.getUniqueId(),
-                        Bukkit.getCurrentTick(),
-                        attacker.getAttackCooldown()
-                )
-        );
+    public boolean areAlertsEnabled() {
+        return alerts;
     }
 
-    @EventHandler
-    public void onDamage(EntityDamageByEntityEvent event) {
+    public void setEnabledSystem(boolean value) {
+        enabled = value;
+        getConfig().set("enabled", value);
+        saveConfig();
 
-        if (!active) return;
-
-        if (!(event.getDamager() instanceof Player attacker)) return;
-
-        if (!(event.getEntity() instanceof Player target)) return;
-
-        UUID attackerId = attacker.getUniqueId();
-
-        SwingData data = swings.get(attackerId);
-
-        if (data == null) return;
-
-        long elapsed = Bukkit.getCurrentTick() - data.tick;
-
-        if (elapsed > trackingTicks) {
-            swings.remove(attackerId);
-            return;
-        }
-
-        if (!data.target.equals(target.getUniqueId())) {
-            return;
-        }
-
-        swings.remove(attackerId);
-
-        if (alerts) {
-            sendTrackedAlert(attacker, target, data, event);
+        if (!value) {
+            hitTracker.clear();
         }
     }
 
-    private void sendTrackedAlert(
-            Player attacker,
-            Player target,
-            SwingData data,
-            EntityDamageByEntityEvent event
-    ) {
+    public void setAlerts(boolean value) {
+        alerts = value;
+        getConfig().set("alerts", value);
+        saveConfig();
+    }
 
-        String message =
-                ChatColor.GOLD + "[NerithMc] "
-                + ChatColor.GREEN + "HIT CONFIRMED "
-                + ChatColor.GRAY + attacker.getName()
-                + ChatColor.WHITE + " -> "
-                + ChatColor.AQUA + target.getName()
-                + ChatColor.GRAY + " | Damage: "
-                + ChatColor.YELLOW
-                + String.format("%.2f", event.getFinalDamage())
-                + ChatColor.GRAY + " | Cooldown: "
-                + ChatColor.YELLOW
-                + String.format("%.2f", data.cooldown);
+    public void sendAlert(String message) {
+        if (!alerts) return;
 
-        for (Player player : Bukkit.getOnlinePlayers()) {
+        String prefix = ChatColor.GOLD + "[NerithMc] ";
 
+        for (var player : Bukkit.getOnlinePlayers()) {
             if (player.hasPermission("nerithmc.alerts")) {
-                player.sendMessage(message);
+                player.sendMessage(prefix + message);
             }
         }
     }
@@ -204,103 +84,37 @@ public final class NerithMc extends JavaPlugin implements Listener {
             String label,
             String[] args
     ) {
-
         if (!command.getName().equalsIgnoreCase("nerithmc")) {
             return false;
         }
 
         if (!sender.hasPermission("nerithmc.admin")) {
-
-            sender.sendMessage(
-                    PREFIX + ChatColor.RED
-                    + "You don't have permission."
-            );
-
+            sender.sendMessage(ChatColor.RED + "No permission.");
             return true;
         }
 
         if (args.length == 0 || args[0].equalsIgnoreCase("status")) {
-
-            sender.sendMessage(PREFIX + ChatColor.YELLOW
-                    + "Version: " + getDescription().getVersion());
-
-            sender.sendMessage(PREFIX + ChatColor.YELLOW
-                    + "Enabled: " + active);
-
-            sender.sendMessage(PREFIX + ChatColor.YELLOW
-                    + "Alerts: " + alerts);
-
-            sender.sendMessage(PREFIX + ChatColor.YELLOW
-                    + "Tracking: " + swings.size());
-
+            sender.sendMessage(ChatColor.GOLD + "NerithMc");
+            sender.sendMessage("Enabled: " + enabled);
+            sender.sendMessage("Alerts: " + alerts);
+            sender.sendMessage("Tracked: " + hitTracker.size());
             return true;
         }
 
         switch (args[0].toLowerCase()) {
-
-            case "on" -> {
-
-                active = true;
-
-                getConfig().set("enabled", true);
-
-                saveConfig();
-
-                swings.clear();
-
-                sender.sendMessage(
-                        PREFIX + ChatColor.GREEN
-                        + "NerithMc enabled."
-                );
-            }
-
-            case "off" -> {
-
-                active = false;
-
-                getConfig().set("enabled", false);
-
-                saveConfig();
-
-                swings.clear();
-
-                sender.sendMessage(
-                        PREFIX + ChatColor.RED
-                        + "NerithMc disabled."
-                );
-            }
-
-            case "alerts" -> {
-
-                alerts = !alerts;
-
-                getConfig().set("alerts", alerts);
-
-                saveConfig();
-
-                sender.sendMessage(
-                        PREFIX + ChatColor.YELLOW
-                        + "Alerts: " + alerts
-                );
-            }
+            case "on" -> setEnabledSystem(true);
+            case "off" -> setEnabledSystem(false);
+            case "alerts" -> setAlerts(!alerts);
 
             case "reload" -> {
-
                 reloadConfig();
-
-                loadSettings();
-
-                swings.clear();
-
-                sender.sendMessage(
-                        PREFIX + ChatColor.GREEN
-                        + "Configuration reloaded."
-                );
+                setEnabledSystem(getConfig().getBoolean("enabled", true));
+                setAlerts(getConfig().getBoolean("alerts", true));
+                hitTracker.clear();
             }
 
             default -> sender.sendMessage(
-                    PREFIX + ChatColor.YELLOW
-                    + "/nerithmc [status|on|off|alerts|reload]"
+                    "/nerithmc [status|on|off|alerts|reload]"
             );
         }
 
