@@ -4,20 +4,15 @@ version: '1.0.0'
 main: com.nerith.mc.NerithMc
 api-version: '1.21'
 author: Nerith
-description: Combat hit tracking and Ghost Hit diagnostics.
 
 commands:
   nerithmc:
     description: NerithMc main command
     usage: /nerithmc [status|on|off|alerts|reload]
-    aliases:
-      - nm
+    aliases: [nm]
 
 permissions:
   nerithmc.admin:
-    description: Allows managing NerithMc
     default: op
-
   nerithmc.alerts:
-    description: Receives NerithMc alerts
     default: op
