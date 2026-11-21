@@ -1,156 +1,129 @@
 
 package com.nerith.mc;
 
+import io.papermc.paper.event.player.PrePlayerAttackEntityEvent;
 import org.bukkit.Bukkit;
-import org.bukkit.ChatColor;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
-import org.bukkit.event.player.PlayerAnimationEvent;
-import org.bukkit.event.player.PlayerAnimationType;
 import org.bukkit.event.player.PlayerQuitEvent;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.UUID;
+import java.util.Locale;
 
-public class HitListener implements Listener {
+public final class HitListener implements Listener {
 
     private final NerithMc plugin;
     private final HitTracker tracker;
-    private final AimDetector aimDetector = new AimDetector();
-
-    private final Map<UUID, PendingHit> pending = new HashMap<>();
-
-    private static class PendingHit {
-        final UUID target;
-        final long createdAt;
-
-        PendingHit(UUID target, long createdAt) {
-            this.target = target;
-            this.createdAt = createdAt;
-        }
-    }
 
     public HitListener(NerithMc plugin, HitTracker tracker) {
         this.plugin = plugin;
         this.tracker = tracker;
     }
 
-    @EventHandler
-    public void onSwing(PlayerAnimationEvent event) {
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onPreAttack(PrePlayerAttackEntityEvent event) {
 
         if (!plugin.isEnabledSystem()) return;
+        if (!event.willAttack()) return;
 
-        if (event.getAnimationType()
-                != PlayerAnimationType.ARM_SWING) {
-            return;
-        }
+        if (!(event.getAttacked() instanceof Player target)) return;
 
         Player attacker = event.getPlayer();
 
-        tracker.registerSwing(attacker);
+        if (attacker.equals(target)) return;
+        if (!attacker.getWorld().equals(target.getWorld())) return;
 
-        double reach = plugin.getConfig().getDouble(
-                "combat.reach", 4.5
-        );
+        HitTracker.AttackAttempt attempt =
+                tracker.registerAttack(attacker, target);
 
-        Player target = aimDetector.findTarget(attacker, reach);
+        int delay = Math.max(1, Math.min(3,
+                plugin.getConfig().getInt(
+                        "combat.tracking-ticks", 1
+                )
+        ));
 
-        if (target == null) {
-            return;
-        }
+        Bukkit.getScheduler().runTaskLater(plugin, () -> {
 
-        PendingHit hit = new PendingHit(
-                target.getUniqueId(),
-                tracker.getTick()
-        );
+            if (!tracker.finishAttempt(attacker, attempt)) return;
 
-        pending.put(attacker.getUniqueId(), hit);
+            if (!plugin.isEnabledSystem()) return;
+            if (!attacker.isOnline() || !target.isOnline()) return;
 
-        alert(
-                ChatColor.YELLOW + "SWING TARGET "
-                + ChatColor.GRAY + attacker.getName()
-                + " -> " + target.getName()
-        );
+            if (attempt.wasDamageEventSeen()) {
+                if (attempt.wasDamageCancelled()) {
+                    debug("DAMAGE_EVENT_CANCELLED "
+                            + attacker.getName() + " -> "
+                            + target.getName());
+                }
 
-        Bukkit.getScheduler().runTaskLater(
-                plugin,
-                () -> {
-                    PendingHit current =
-                            pending.get(attacker.getUniqueId());
+                return;
+            }
 
-                    if (current != hit) return;
+            if (!plugin.getConfig().getBoolean("debug", false)) return;
 
-                    pending.remove(attacker.getUniqueId());
+            boolean bothGliding =
+                    attacker.isGliding() && target.isGliding();
 
-                    alert(
-                            ChatColor.RED + "POSSIBLE GHOST HIT "
-                            + ChatColor.GRAY + attacker.getName()
-                            + " -> " + target.getName()
-                            + " | No matching damage event"
-                    );
-                },
-                2L
-        );
+            double distance =
+                    attacker.getLocation().distance(target.getLocation());
+
+            debug(String.format(
+                    Locale.US,
+                    "ATTACK_WITHOUT_DAMAGE_EVENT attacker=%s target=%s " +
+                    "elytra=%s distance=%.3f " +
+                    "attackerCooldown=%.3f targetCooldown=%.3f " +
+                    "attackerVelocity=(%.3f,%.3f,%.3f) " +
+                    "targetVelocity=(%.3f,%.3f,%.3f) tick=%d",
+
+                    attacker.getName(),
+                    target.getName(),
+                    bothGliding,
+                    distance,
+
+                    attacker.getAttackCooldown(),
+                    target.getAttackCooldown(),
+
+                    attacker.getVelocity().getX(),
+                    attacker.getVelocity().getY(),
+                    attacker.getVelocity().getZ(),
+
+                    target.getVelocity().getX(),
+                    target.getVelocity().getY(),
+                    target.getVelocity().getZ(),
+
+                    attempt.getCreatedTick()
+            ));
+
+        }, delay);
     }
 
-    @EventHandler(priority = EventPriority.MONITOR)
+    @EventHandler(
+            priority = EventPriority.MONITOR,
+            ignoreCancelled = false
+    )
     public void onDamage(EntityDamageByEntityEvent event) {
 
         if (!(event.getDamager() instanceof Player attacker)) return;
         if (!(event.getEntity() instanceof Player target)) return;
 
-        PendingHit hit = pending.get(attacker.getUniqueId());
-
-        if (hit == null) return;
-
-        if (!hit.target.equals(target.getUniqueId())) return;
-
-        pending.remove(attacker.getUniqueId());
-
-        tracker.consumeSwing(attacker);
-
-        if (event.isCancelled()) {
-            alert(
-                    ChatColor.RED + "DAMAGE CANCELLED "
-                    + ChatColor.GRAY + attacker.getName()
-                    + " -> " + target.getName()
-            );
-            return;
-        }
-
-        alert(
-                ChatColor.GREEN + "HIT CONFIRMED "
-                + ChatColor.GRAY + attacker.getName()
-                + " -> " + target.getName()
-                + " | Damage: "
-                + String.format("%.2f", event.getFinalDamage())
+        tracker.markDamage(
+                attacker,
+                target,
+                event.isCancelled(),
+                event.getFinalDamage()
         );
-    }
-
-    private void alert(String message) {
-
-        String prefix = ChatColor.GOLD + "[NerithMc] ";
-
-        plugin.getLogger().info(
-                ChatColor.stripColor(message)
-        );
-
-        for (Player player : Bukkit.getOnlinePlayers()) {
-            if (player.hasPermission("nerithmc.alerts")) {
-                player.sendMessage(prefix + message);
-            }
-        }
     }
 
     @EventHandler
     public void onQuit(PlayerQuitEvent event) {
-        UUID id = event.getPlayer().getUniqueId();
+        tracker.remove(event.getPlayer());
+    }
 
-        pending.remove(id);
-        tracker.consumeSwing(event.getPlayer());
+    private void debug(String message) {
+        if (!plugin.getConfig().getBoolean("debug", false)) return;
+
+        plugin.getLogger().info("[CombatDebug] " + message);
     }
 }
