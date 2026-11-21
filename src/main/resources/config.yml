@@ -1,0 +1,13 @@
+
+# NerithMc Configuration
+# Author: Nerith
+
+enabled: true
+
+alerts: true
+
+# Maximum target detection distance
+reach: 4.5
+
+# Maximum ticks between swing and damage
+tracking-ticks: 5
